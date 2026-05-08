@@ -1,0 +1,1 @@
+Frontend module for emergency routing system (React + Leaflet map)
