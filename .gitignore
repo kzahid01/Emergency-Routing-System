@@ -1,5 +1,29 @@
+# Python
 __pycache__/
 *.pyc
-backend/__pycache__/
-TODO.md
-temp
+
+# Virtual env
+venv/
+.env/
+
+# ML / AI models
+*.pkl
+*.joblib
+*.h5
+*.pt
+
+# Dataset files
+*.csv
+*.parquet
+
+# Graph / Routing cache
+*.graphml
+*.geojson
+*.osm
+map_load/osm_cache/
+cache/
+data/
+
+# IDE / OS
+.vscode/
+.DS_Store
