@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from models import RouteRequest
-from routing import calculate_route
+from backend.models import RouteRequest
+from backend.routing import calculate_route
 
 app = FastAPI()
 
@@ -14,21 +14,12 @@ def home():
 def get_route(request: RouteRequest):
 
     try:
-        path, distance = calculate_route(
-            request.start,
-            request.end
-        )
+        result = calculate_route(request.start)
 
-    except:
+        return result
+
+    except Exception as e:
+
         return {
-            "error": "No route found"
+            "error": str(e)
         }
-
-    return {
-        "start": request.start,
-        "end": request.end,
-        "path": path,
-        "cost": distance,
-        "eta_minutes": distance * 2,
-        "logic": "BMSSP + traffic aware routing"
-    }
