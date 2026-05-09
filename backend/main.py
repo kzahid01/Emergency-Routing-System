@@ -1,25 +1,27 @@
-from fastapi import FastAPI
-from backend.models import RouteRequest
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
 from backend.routing import calculate_route
 
 app = FastAPI()
 
-@app.get("/")
-def home():
-    return {
-        "message": "Emergency Routing System is running"
-    }
+
+class RouteRequest(BaseModel):
+    start: int
+    end: int
+    emergency_level: str = "medium"
+
 
 @app.post("/route")
 def get_route(request: RouteRequest):
 
-    try:
-        result = calculate_route(request.start)
+    result = calculate_route(
+        request.start,
+        request.end,
+        request.emergency_level
+    )
 
-        return result
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
 
-    except Exception as e:
-
-        return {
-            "error": str(e)
-        }
+    return result
