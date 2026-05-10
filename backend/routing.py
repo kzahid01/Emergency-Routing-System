@@ -1,195 +1,241 @@
 from datetime import datetime
-import math
-import os
-import numpy as np
 import networkx as nx
 
-from ai_model.knn_model import TrafficPredictor, traffic_level_to_multiplier
-from ai_model.traffic_data_generator import TrafficDataGenerator
-from backend.bmssp import bmssp_select_source_to_target, bmssp_select_target_from_source
+from backend.bmssp import (
+    bmssp_select_source_to_target,
+    bmssp_select_target_from_source,
+)
+
+from ai_model.knn_model import (
+    TrafficPredictor,
+    traffic_level_to_multiplier,
+)
+
 from map_load.map import MAP_DATA
 
 
 G = MAP_DATA["graph"]
 
-# ---------- SAFETY CHECK ----------
-def is_valid_node(n):
-    return n in G
 
-
-EMERGENCY_PROFILES = {
-    "low": {"traffic_weight": 1.15, "risk_weight": 0.35},
-    "medium": {"traffic_weight": 1.0, "risk_weight": 0.15},
-    "critical": {"traffic_weight": 0.8, "risk_weight": 0.0},
-}
-
-ROAD_RISK = {
-    "living_street": 0.25,
-    "residential": 0.12,
-    "tertiary": 0.05,
-    "secondary": 0.03,
-    "primary": 0.02,
-    "trunk": 0.01,
-    "motorway": 0.0,
-}
-
-traffic_generator = TrafficDataGenerator()
 traffic_predictor = TrafficPredictor()
 
 try:
     traffic_predictor.load_model()
-except Exception:
+except:
     traffic_predictor = None
 
 
-# ---------- CLEAN ----------
-def clean_value(v):
-    if v is None:
-        return None
-    if isinstance(v, float) and math.isnan(v):
-        return None
-    return v
-
-
-def normalize_node_id(node_id):
-    if node_id in G:
-        return node_id
-    try:
-        node_id = int(node_id)
-        if node_id in G:
-            return node_id
-    except:
-        pass
-    return node_id
-
-
-# ---------- FACILITY FILTER ----------
-def is_responder(u):
-    return clean_value(u.get("amenity")) in {"police", "fire_station"} \
-        or clean_value(u.get("emergency")) == "ambulance_station"
-
-
-def is_hospital(u):
-    return clean_value(u.get("amenity")) == "hospital" \
-        or clean_value(u.get("healthcare")) == "hospital"
-
-
-# ---------- NODE HELPERS ----------
 def nearest_node(lat, lon):
-    best = None
-    best_d = float("inf")
-    for n, d in G.nodes(data=True):
-        y = d.get("y")
-        x = d.get("x")
-        if y is None or x is None:
-            continue
-        dist = (y - lat) ** 2 + (x - lon) ** 2
-        if dist < best_d:
-            best_d = dist
-            best = n
-    return best
 
+    best_node = None
 
-# ---------- BUILD CANDIDATES (FIXED) ----------
-def build_candidates():
-    responders = []
-    hospitals = []
+    best_distance = float("inf")
 
-    for u in MAP_DATA["units"]:
-        node = nearest_node(u["lat"], u["lon"])
-        if node is None or node not in G:
+    for node, data in G.nodes(data=True):
+
+        node_lat = data.get("y")
+        node_lon = data.get("x")
+
+        if node_lat is None:
             continue
 
-        obj = {
+        distance = (
+            (node_lat - lat) ** 2 +
+            (node_lon - lon) ** 2
+        )
+
+        if distance < best_distance:
+
+            best_distance = distance
+
+            best_node = node
+
+    return best_node
+
+
+def path_coordinates(path):
+
+    result = []
+
+    for node in path:
+
+        data = G.nodes[node]
+
+        result.append({
             "node": node,
-            "name": u.get("name", "Unknown"),
-            "lat": u["lat"],
-            "lon": u["lon"],
-        }
+            "lat": data.get("y"),
+            "lon": data.get("x"),
+        })
 
-        if is_responder(u):
-            responders.append(obj)
-        if is_hospital(u):
-            hospitals.append(obj)
-
-    # FORCE fallback if too small
-    if len(responders) == 0:
-        responders = [{"node": list(G.nodes())[0], "name": "Fallback Responder"}]
-
-    if len(hospitals) == 0:
-        hospitals = [{"node": list(G.nodes())[-1], "name": "Fallback Hospital"}]
-
-    return responders, hospitals
+    return result
 
 
-RESPONDERS, HOSPITALS = build_candidates()
+def get_traffic_multiplier(edge_data):
 
+    if not traffic_predictor:
+        return 1.0
 
-# ---------- EDGE COST ----------
-def edge_cost(data):
-    length = float(data.get("length", 1))
-    return length
+    try:
+
+        hour = datetime.now().hour
+
+        road_type = edge_data.get(
+            "highway",
+            "residential"
+        )
+
+        length = float(
+            edge_data.get("length", 1)
+        )
+
+        traffic_level = (
+            traffic_predictor.predict(
+                hour=hour,
+                road_type=str(road_type),
+                length=length
+            )
+        )
+
+        return (
+            traffic_level_to_multiplier(
+                traffic_level
+            )
+        )
+
+    except:
+        return 1.0
 
 
 def apply_costs():
-    for u, v, k, data in G.edges(keys=True, data=True) if G.is_multigraph() else G.edges(data=True):
-        data["cost"] = edge_cost(data)
+
+    if G.is_multigraph():
+
+        for u, v, k, data in G.edges(
+            keys=True,
+            data=True
+        ):
+
+            length = float(
+                data.get("length", 1)
+            )
+
+            multiplier = (
+                get_traffic_multiplier(
+                    data
+                )
+            )
+
+            data["cost"] = (
+                length *
+                multiplier
+            )
+
+    else:
+
+        for u, v, data in G.edges(
+            data=True
+        ):
+
+            length = float(
+                data.get("length", 1)
+            )
+
+            multiplier = (
+                get_traffic_multiplier(
+                    data
+                )
+            )
+
+            data["cost"] = (
+                length *
+                multiplier
+            )
 
 
-# ---------- PATH ----------
-def path_coords(path):
-    out = []
-    for n in path:
-        d = G.nodes[n]
-        out.append({"node": n, "lat": d.get("y"), "lon": d.get("x")})
-    return out
+def calculate_emergency_dispatch(
+    emergency_lat,
+    emergency_lon,
+    emergency_level="critical"
+):
 
+    emergency_node = nearest_node(
+        emergency_lat,
+        emergency_lon
+    )
 
-# ---------- MAIN ROUTE ----------
-def calculate_route(start, end, emergency_level="medium"):
-    start = normalize_node_id(start)
-    end = normalize_node_id(end)
-
-    if start not in G or end not in G:
-        return {"error": "Invalid start/end node"}
+    if emergency_node not in G:
+        return {
+            "error": "Invalid location"
+        }
 
     apply_costs()
 
-    responder_nodes = [r["node"] for r in RESPONDERS if r["node"] in G]
-    hospital_nodes = [h["node"] for h in HOSPITALS if h["node"] in G]
+    responders = []
 
-    # ---------- BMSSP SAFE CALL ----------
-    try:
-        responder, rcost, rpath = bmssp_select_source_to_target(
-            G, responder_nodes, start, weight="cost"
+    hospitals = []
+
+    for node, data in G.nodes(data=True):
+
+        amenity = data.get("amenity")
+
+        if amenity in [
+            "hospital",
+            "police",
+            "fire_station",
+        ]:
+            responders.append(node)
+
+        if amenity == "hospital":
+            hospitals.append(node)
+
+    if not responders:
+        responders = [list(G.nodes())[0]]
+
+    if not hospitals:
+        hospitals = [list(G.nodes())[-1]]
+
+    responder_node, responder_cost, responder_path = (
+        bmssp_select_source_to_target(
+            G,
+            responders,
+            emergency_node,
+            weight="cost"
         )
-    except Exception:
-        responder = None
+    )
 
-    if responder is None:
-        # FALLBACK (CRITICAL FIX)
-        responder = responder_nodes[0]
-        rpath = nx.shortest_path(G, responder, start, weight="length")
-        rcost = nx.shortest_path_length(G, responder, start, weight="length")
-
-    try:
-        hospital, hcost, hpath = bmssp_select_target_from_source(
-            G, start, hospital_nodes, weight="cost"
+    hospital_node, hospital_cost, hospital_path = (
+        bmssp_select_target_from_source(
+            G,
+            emergency_node,
+            hospitals,
+            weight="cost"
         )
-    except Exception:
-        hospital = None
-
-    if hospital is None:
-        hospital = hospital_nodes[0]
-        hpath = nx.shortest_path(G, start, hospital, weight="length")
-        hcost = nx.shortest_path_length(G, start, hospital, weight="length")
+    )
 
     return {
-        "algorithm": "BMSSP+SAFE",
-        "best_responder": responder,
-        "best_hospital": hospital,
-        "responder_cost": rcost,
-        "hospital_cost": hcost,
-        "responder_route_coordinates": path_coords(rpath),
-        "hospital_route_coordinates": path_coords(hpath),
+
+        "algorithm":
+            "BMSSP_TRAFFIC_AI",
+
+        "best_responder":
+            responder_node,
+
+        "best_hospital":
+            hospital_node,
+
+        "responder_cost":
+            responder_cost,
+
+        "hospital_cost":
+            hospital_cost,
+
+        "responder_route_coordinates":
+            path_coordinates(
+                responder_path
+            ),
+
+        "hospital_route_coordinates":
+            path_coordinates(
+                hospital_path
+            ),
     }

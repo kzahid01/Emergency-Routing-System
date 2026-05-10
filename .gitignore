@@ -24,6 +24,10 @@ map_load/osm_cache/
 cache/
 data/
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
 # IDE / OS
 .vscode/
 .DS_Store

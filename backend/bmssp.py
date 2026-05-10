@@ -1,192 +1,197 @@
-from __future__ import annotations
-
 import heapq
-from math import inf, log
-from typing import Dict, Iterable, List, Optional, Tuple, Any
-
-import networkx as nx
+from math import inf
 
 
-# -----------------------------
-# RESULT STRUCTURE
-# -----------------------------
-class BMSSPResult:
-    def __init__(self):
-        self.distances: Dict[Any, float] = {}
-        self.predecessors: Dict[Any, Any] = {}
-        self.source_for: Dict[Any, Any] = {}
-        self.settled_order: List[Any] = []
-        self.boundary: float = inf
+def reconstruct_path(pred, source, target):
 
-
-# -----------------------------
-# EDGE WEIGHT
-# -----------------------------
-def edge_weight(data: dict, weight: str) -> float:
-    v = data.get(weight, data.get("length", 1))
-    try:
-        return float(v)
-    except:
-        return 1.0
-
-
-def iter_out_edges(G, u, weight):
-    """Unified edge iterator for DiGraph + MultiDiGraph"""
-    if u not in G:
-        return
-
-    if G.is_multigraph():
-        for v, edges in G[u].items():
-            for k, data in edges.items():
-                yield v, k, data, edge_weight(data, weight)
-    else:
-        for v, data in G[u].items():
-            yield v, 0, data, edge_weight(data, weight)
-
-
-# -----------------------------
-# PATH RECONSTRUCTION
-# -----------------------------
-def reconstruct_path(predecessors, source, target):
-    if target == source:
+    if source == target:
         return [source]
-    if target not in predecessors:
-        return []
 
     path = [target]
-    cur = target
+    current = target
 
-    while cur != source:
-        prev = predecessors.get(cur)
-        if prev is None:
+    while current != source:
+
+        if current not in pred:
             return []
-        cur = prev[0]
-        path.append(cur)
 
-    path.reverse()
-    return path
+        current = pred[current]
+        path.append(current)
+
+    return list(reversed(path))
 
 
-# -----------------------------
-# CORE BMSSP (FIXED)
-# -----------------------------
-def bounded_multi_source_shortest_paths_paper_structure(
+def bmssp_select_source_to_target(
     G,
-    sources: Iterable,
-    bound: float = inf,
-    targets: Optional[Iterable] = None,
-    weight: str = "cost",
-) -> BMSSPResult:
+    sources,
+    target,
+    weight="cost"
+):
 
-    sources = list(set(sources))
-    result = BMSSPResult()
+    dist = {
+        node: inf for node in G.nodes
+    }
 
-    dist = {n: inf for n in G.nodes}
     pred = {}
+
     source_for = {}
 
     heap = []
 
-    # -----------------------------
-    # INIT SOURCES (IMPORTANT FIX)
-    # -----------------------------
-    for s in sources:
-        if s in G:
-            dist[s] = 0
-            source_for[s] = s
-            heapq.heappush(heap, (0, s))
+    for source in sources:
 
-    # -----------------------------
-    # DIJKSTRA-LIKE CORE
-    # (BMSSP reduces safely to multi-source Dijkstra)
-    # -----------------------------
+        dist[source] = 0
+
+        source_for[source] = source
+
+        heapq.heappush(
+            heap,
+            (0, source)
+        )
+
     visited = set()
 
     while heap:
-        d, u = heapq.heappop(heap)
+
+        current_dist, u = heapq.heappop(heap)
 
         if u in visited:
             continue
+
         visited.add(u)
 
-        result.settled_order.append(u)
-
-        if d > bound:
+        if u == target:
             break
 
-        for v, k, data, w in iter_out_edges(G, u, weight):
-            nd = d + w
+        for v in G.neighbors(u):
 
-            if nd < dist[v]:
-                dist[v] = nd
-                pred[v] = (u, k)
+            edge_data = G[u][v]
 
-                # -----------------------------
-                # FIX #1: ALWAYS PROPAGATE SOURCE
-                # -----------------------------
-                source_for[v] = source_for.get(u, u)
+            if G.is_multigraph():
+                edge_data = list(
+                    edge_data.values()
+                )[0]
 
-                heapq.heappush(heap, (nd, v))
+            weight_value = float(
+                edge_data.get(weight, 1)
+            )
 
-    # -----------------------------
-    # STORE RESULTS
-    # -----------------------------
-    result.distances = {k: v for k, v in dist.items() if v < inf}
-    result.predecessors = pred
-    result.source_for = source_for
-    result.boundary = bound
+            new_dist = (
+                current_dist +
+                weight_value
+            )
 
-    return result
+            if new_dist < dist[v]:
 
+                dist[v] = new_dist
 
-# -----------------------------
-# HELPERS
-# -----------------------------
-def best_target(result: BMSSPResult, targets):
-    best = None
-    best_d = inf
+                pred[v] = u
 
-    for t in targets:
-        if t in result.distances and result.distances[t] < best_d:
-            best = t
-            best_d = result.distances[t]
+                source_for[v] = source_for[u]
 
-    return best, best_d
+                heapq.heappush(
+                    heap,
+                    (new_dist, v)
+                )
 
-
-# -----------------------------
-# API: SOURCE -> TARGET
-# -----------------------------
-def bmssp_select_source_to_target(G, sources, target, bound=inf, weight="cost"):
-    res = bounded_multi_source_shortest_paths_paper_structure(
-        G, sources, bound, [target], weight
-    )
-
-    if target not in res.distances:
+    if dist[target] == inf:
         return None, inf, []
 
-    source = res.source_for.get(target)
+    source = source_for[target]
 
-    # FIX #2: fallback safety
-    if source is None:
-        source = list(sources)[0]
-
-    path = reconstruct_path(res.predecessors, source, target)
-    return source, res.distances[target], path
-
-
-# -----------------------------
-# API: TARGET FROM SOURCE
-# -----------------------------
-def bmssp_select_target_from_source(G, source, targets, bound=inf, weight="cost"):
-    res = bounded_multi_source_shortest_paths_paper_structure(
-        G, [source], bound, targets, weight
+    path = reconstruct_path(
+        pred,
+        source,
+        target
     )
 
-    target, dist = best_target(res, targets)
+    return (
+        source,
+        dist[target],
+        path
+    )
 
-    if target is None:
+
+def bmssp_select_target_from_source(
+    G,
+    source,
+    targets,
+    weight="cost"
+):
+
+    dist = {
+        node: inf for node in G.nodes
+    }
+
+    pred = {}
+
+    heap = [(0, source)]
+
+    dist[source] = 0
+
+    visited = set()
+
+    while heap:
+
+        current_dist, u = heapq.heappop(heap)
+
+        if u in visited:
+            continue
+
+        visited.add(u)
+
+        for v in G.neighbors(u):
+
+            edge_data = G[u][v]
+
+            if G.is_multigraph():
+                edge_data = list(
+                    edge_data.values()
+                )[0]
+
+            weight_value = float(
+                edge_data.get(weight, 1)
+            )
+
+            new_dist = (
+                current_dist +
+                weight_value
+            )
+
+            if new_dist < dist[v]:
+
+                dist[v] = new_dist
+
+                pred[v] = u
+
+                heapq.heappush(
+                    heap,
+                    (new_dist, v)
+                )
+
+    best_target = None
+
+    best_distance = inf
+
+    for target in targets:
+
+        if dist[target] < best_distance:
+
+            best_distance = dist[target]
+
+            best_target = target
+
+    if best_target is None:
         return None, inf, []
 
-    path = reconstruct_path(res.predecessors, source, target)
-    return target, dist, path
+    path = reconstruct_path(
+        pred,
+        source,
+        best_target
+    )
+
+    return (
+        best_target,
+        best_distance,
+        path
+    )
